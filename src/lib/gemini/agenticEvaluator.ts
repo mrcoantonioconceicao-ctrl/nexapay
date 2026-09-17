@@ -35,17 +35,16 @@ export async function evaluateAgenticPolicy(params: {
     }
 
     return await response.json();
-  } catch {
-    // Client-side fallback if server API is unavailable
-    const isApproved = params.requestedAmountUsd <= params.policyParams.maxSpendPerTx;
+  } catch (error) {
+    // Fallback if server AI API is unavailable. Default to denial for security.
+    console.error("AI policy evaluation API unavailable, falling back to client-side denial:", error);
     return {
-      approved: isApproved,
-      riskScore: isApproved ? 15 : 85,
-      reasoning: isApproved
-        ? `Request of $${params.requestedAmountUsd.toFixed(2)} is within the PDA single transaction allowance limit ($${params.policyParams.maxSpendPerTx.toFixed(2)}).`
-        : `Request of $${params.requestedAmountUsd.toFixed(2)} exceeds allowance cap ($${params.policyParams.maxSpendPerTx.toFixed(2)}). PDA policy rejected transaction.`,
-      recommendedPriorityFeeLamports: 5000,
-      mode: "Client Local Policy Engine",
+      approved: false,
+      riskScore: 100,
+      reasoning: "AI policy evaluation API is currently unavailable. Transaction rejected for safety and integrity.",
+      recommendedPriorityFeeLamports: 0,
+      suggestedSafetyAction: "Contact support or try again later if this issue persists.",
+      mode: "Client Local Policy Engine (Safe Fallback)",
     };
   }
 }
