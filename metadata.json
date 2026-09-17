@@ -1,0 +1,6 @@
+{
+  "name": "Nexa Pay | Solana & Hybrid PIX Infrastructure",
+  "description": "Non-custodial Solana & PIX payment infrastructure with Anchor smart contracts, Agentic Session Allowance PDAs, and CPI liquidity routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
