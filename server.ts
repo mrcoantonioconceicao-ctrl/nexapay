@@ -150,7 +150,7 @@ Analyze this automated AI agent payment request:
 - Max Spend Per Tx Allowed: $${policyParams?.maxSpendPerTx || 50}
 - Max Daily Limit: $${policyParams?.maxDailyLimit || 200}
 - Allowed Categories: ${policyParams?.allowedCategories?.join(", ") || "APIs, Compute, SaaS"}
-- Custom Context/Prompt: ${prompt || "Standard API micro-payment evaluation"}
+- Custom Context/Prompt: ${sanitizeUserInputForLLM(prompt || "Standard API micro-payment evaluation")}
 
 Respond strictly in JSON with this structure:
 {
