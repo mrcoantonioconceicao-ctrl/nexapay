@@ -17,7 +17,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "bs58": "^6.0.0",
     "buffer": "^6.0.3",
-    "dotenv": "^17.2.3",
+    "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
