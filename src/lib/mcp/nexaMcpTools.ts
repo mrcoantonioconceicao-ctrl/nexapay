@@ -90,6 +90,94 @@ export class NexaMcpServer {
       };
     }
 
+    // --- START Input Validation based on tool.inputSchema ---
+    const inputSchema = tool.inputSchema;
+    const errors: string[] = [];
+
+    // 1. Check for missing required properties
+    for (const requiredProp of inputSchema.required) {
+      if (args[requiredProp] === undefined) {
+        errors.push(`Missing required parameter: '${requiredProp}'`);
+      }
+    }
+
+    // 2. Check types and specific constraints
+    for (const propName in inputSchema.properties) {
+      if (Object.prototype.hasOwnProperty.call(inputSchema.properties, propName)) {
+        const schemaProp = inputSchema.properties[propName];
+        const argValue = args[propName];
+
+        if (argValue !== undefined) { // Only validate if value is present
+          switch (schemaProp.type) {
+            case "string":
+              if (typeof argValue !== "string") {
+                errors.push(`Parameter '${propName}' must be a string, got ${typeof argValue}`);
+              } else {
+                  // Basic validation for Base58 public keys (approx. 32-44 chars, specific alphabet)
+                  if (propName.endsWith("Pubkey") && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(argValue)) {
+                      errors.push(`Parameter '${propName}' must be a valid Base58 public key string.`);
+                  }
+                  // Check for non-empty strings where applicable, e.g., orderId
+                  if (propName === "orderId" && argValue.trim().length === 0) {
+                      errors.push(`Parameter '${propName}' cannot be empty.`);
+                  }
+              }
+              break;
+            case "number":
+              if (typeof argValue !== "number" || isNaN(argValue)) {
+                errors.push(`Parameter '${propName}' must be a number, got ${typeof argValue}`);
+              } else {
+                // Ensure amounts and limits are non-negative
+                if ((propName.includes("amount") || propName.includes("limit")) && argValue < 0) {
+                  errors.push(`Parameter '${propName}' must be a non-negative number.`);
+                }
+                // Ensure timestamps are in the future (for 'validUntilTimestamp')
+                if (propName === "validUntilTimestamp" && argValue < Date.now() / 1000) {
+                    errors.push(`Parameter '${propName}' must be a future Unix timestamp.`);
+                }
+              }
+              break;
+            // Add other types (boolean, array, object) if they are expected in schemas
+          }
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      return {
+        jsonrpc: "2.0",
+        error: { code: -32602, message: `Invalid params for tool '${name}': ${errors.join("; ")}` }
+      };
+    }
+    // --- END Input Validation ---
+
+    // Process tool execution logic (args are now validated)
+    return {
+      jsonrpc: "2.0",
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "success",
+              executedTool: name,
+              parameters: args, // Now `args` is validated
+              timestamp: Date.now(),
+              nonCustodialVerified: true
+            }, null, 2)
+          }
+        ]
+      }
+    };
+  }
+    const tool = this.tools.find((t) => t.name === name);
+    if (!tool) {
+      return {
+        jsonrpc: "2.0",
+        error: { code: -32601, message: `Tool '${name}' not found` }
+      };
+    }
+
     // Process tool execution logic
     return {
       jsonrpc: "2.0",
