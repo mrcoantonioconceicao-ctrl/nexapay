@@ -1,295 +1,169 @@
-import React, { useState, useEffect } from "react";
-import { Navbar } from "./components/Navbar";
-import { MerchantPOS } from "./components/MerchantPOS";
-import { AgenticAllowanceWorkspace } from "./components/AgenticAllowanceWorkspace";
-import { CpiLiquidityRouter } from "./components/CpiLiquidityRouter";
-import { AnchorCodeInspector } from "./components/AnchorCodeInspector";
-import { TransactionExplorer } from "./components/TransactionExplorer";
-import { CheckoutEmbedConfigurator } from "./components/CheckoutEmbedConfigurator";
-import { DocumentationTab } from "./components/DocumentationTab";
-import { ArchitecturalSpecModal } from "./components/ArchitecturalSpecModal";
-import { 
-  FXRates, 
-  MerchantAccount, 
-  AgentSessionAllowance, 
-  NexaTransaction 
-} from "./types";
-import { deriveAgentSessionPDA, NEXA_PROGRAM_ID, MINTS, toValidPublicKey } from "./lib/solana/nexaAnchorProgram";
-import { Keypair, PublicKey } from "@solana/web3.js";
-
-// Deterministic valid Base58 public keys for simulation
-const INITIAL_BUYER_PUBKEY = toValidPublicKey("buyer_solana_devnet_wallet").toBase58();
-const INITIAL_MERCHANT_1_PUBKEY = toValidPublicKey("merchant_devstore_brasil").toBase58();
-const INITIAL_MERCHANT_2_PUBKEY = toValidPublicKey("merchant_cloudcompute_ai").toBase58();
-const INITIAL_AGENT_PUBKEY = toValidPublicKey("autonomous_ai_agent_identity").toBase58();
+import React, { useState } from 'react';
+import { QrCode, ShieldCheck, Zap, CheckCircle2, RefreshCw, ArrowRight } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>("pos");
-  const [specModalOpen, setSpecModalOpen] = useState<boolean>(false);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [loading, setLoading] = useState(false);
+  const [orderId, setOrderId] = useState('ord_demo_999');
+  const [txHash, setTxHash] = useState('');
 
-  // Buyer Wallet Keypair State (Devnet Simulation)
-  const [buyerWalletPubkey, setBuyerWalletPubkey] = useState<string>(INITIAL_BUYER_PUBKEY);
-
-  const handleRotateWallet = () => {
-    const randomKey = Keypair.generate().publicKey.toBase58();
-    setBuyerWalletPubkey(randomKey);
-  };
-
-  // FX Rates State
-  const [fxRates, setFxRates] = useState<FXRates>({
-    USDC_BRL: 5.465,
-    SOL_BRL: 745.20,
-    SOL_USD: 136.35,
-    EURC_BRL: 5.92,
-    updatedAt: new Date().toISOString(),
-    provider: "Nexa Liquidity Aggregator Engine",
-  });
-
-  useEffect(() => {
-    async function fetchFx() {
-      try {
-        const res = await fetch("/api/fx-rates");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.rates) {
-            setFxRates(data);
-          }
-        }
-      } catch {
-        // Fallback to initial default rates
-      }
+  const handleCreateOrder = () => {
+    try {
+      setLoading(true);
+      setTimeout(() => {
+        setOrderId(`nex_ord_${Math.floor(Math.random() * 89999 + 10000)}`);
+        setLoading(false);
+        setStep(2);
+      }, 800);
+    } catch (err) {
+      console.error(err);
+      setLoading(false);
     }
-    fetchFx();
-  }, []);
-
-  // Merchants Data State
-  const [merchants] = useState<MerchantAccount[]>([
-    {
-      id: "mch_devstore",
-      name: "DevStore Brasil Ltda",
-      pixKey: "nexa.merchant@devstore.br",
-      solanaWallet: INITIAL_MERCHANT_1_PUBKEY,
-      usdcTokenAccount: `ATA${INITIAL_MERCHANT_1_PUBKEY.slice(0, 32)}`,
-      category: "E-Commerce & Digital Goods",
-      totalVolumeUsd: 148500.0,
-      totalSettlements: 1240,
-      autoPixOfframp: true,
-    },
-    {
-      id: "mch_cloudai",
-      name: "CloudCompute AI Services",
-      pixKey: "api.billing@cloudcompute.com.br",
-      solanaWallet: INITIAL_MERCHANT_2_PUBKEY,
-      usdcTokenAccount: `ATA${INITIAL_MERCHANT_2_PUBKEY.slice(0, 32)}`,
-      category: "AI API Infrastructure",
-      totalVolumeUsd: 89200.0,
-      totalSettlements: 890,
-      autoPixOfframp: false,
-    },
-  ]);
-
-  // Initial Agent Session Allowances PDAs
-  const [allowances, setAllowances] = useState<AgentSessionAllowance[]>(() => {
-    const buyerKey = toValidPublicKey(INITIAL_BUYER_PUBKEY);
-    const agentKey = toValidPublicKey(INITIAL_AGENT_PUBKEY);
-    const merchKey = toValidPublicKey(INITIAL_MERCHANT_1_PUBKEY);
-    const { pda, bump } = deriveAgentSessionPDA(buyerKey, agentKey, merchKey);
-
-    return [
-      {
-        pdaPublicKey: pda.toBase58(),
-        bump,
-        buyerPublicKey: buyerKey.toBase58(),
-        agentPublicKey: agentKey.toBase58(),
-        merchantPublicKey: merchKey.toBase58(),
-        allowedTokenMint: MINTS.USDC.toBase58(),
-        maxSpendPerTx: 20.0,
-        dailyLimitUsd: 200.0,
-        spentTodayUsd: 35.5,
-        remainingDailyUsd: 164.5,
-        expiryTimestamp: Math.floor(Date.now() / 1000) + 86400 * 7,
-        createdAt: new Date().toLocaleTimeString(),
-        revoked: false,
-        totalTransactionsCount: 3,
-        allowanceScope: ["API Micro-payments", "Compute Cycles"],
-      },
-    ];
-  });
-
-  // Transaction Explorer History
-  const [transactions, setTransactions] = useState<NexaTransaction[]>([
-    {
-      signature: "5Kx9v2W8L1mP94kJ82mP11111111111111111111111111111111111111111111111111111111111111111111",
-      slot: 312849100,
-      blockTime: "13:35:10",
-      confirmationStatus: "finalized",
-      finalityMs: 405,
-      type: "DIRECT_MERCHANT_TRANSFER",
-      buyerPubkey: INITIAL_BUYER_PUBKEY,
-      merchantPubkey: INITIAL_MERCHANT_1_PUBKEY,
-      amount: 25.0,
-      tokenSymbol: "USDC",
-      fiatEquivalentBrl: 136.63,
-      cpiInnerInstructionsCount: 1,
-      isZeroCustodyConfirmed: true,
-      logs: [
-        `Program ${NEXA_PROGRAM_ID.toBase58().slice(0, 16)}... invoke [1]`,
-        "Program log: Instruction: ProcessDirectPayment",
-        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
-        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
-        "Program log: ZERO-CUSTODY verified: Program vault balance remained 0",
-        `Program ${NEXA_PROGRAM_ID.toBase58().slice(0, 16)}... success`,
-      ],
-    },
-    {
-      signature: "3Jz7w4R2M9nQ85pK111111111111111111111111111111111111111111111111111111111111111111111111",
-      slot: 312849042,
-      blockTime: "13:30:22",
-      confirmationStatus: "finalized",
-      finalityMs: 420,
-      type: "AGENTIC_PDA_PAYMENT",
-      buyerPubkey: INITIAL_BUYER_PUBKEY,
-      merchantPubkey: INITIAL_MERCHANT_1_PUBKEY,
-      amount: 12.5,
-      tokenSymbol: "USDC",
-      fiatEquivalentBrl: 68.31,
-      cpiInnerInstructionsCount: 2,
-      isZeroCustodyConfirmed: true,
-      logs: [
-        `Program ${NEXA_PROGRAM_ID.toBase58().slice(0, 16)}... invoke [1]`,
-        "Program log: Instruction: ExecuteAgenticPayment",
-        "Program log: PDA Signer verified bump 254",
-        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
-        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
-        `Program ${NEXA_PROGRAM_ID.toBase58().slice(0, 16)}... success`,
-      ],
-    },
-  ]);
-
-  const handleGrantAllowance = (newAllowance: AgentSessionAllowance) => {
-    setAllowances([newAllowance, ...allowances]);
   };
 
-  const handleRevokeAllowance = (pdaPubkey: string) => {
-    setAllowances((prev) =>
-      prev.map((a) => (a.pdaPublicKey === pdaPubkey ? { ...a, revoked: true } : a))
-    );
+  const handleExecuteSettlement = () => {
+    try {
+      setLoading(true);
+      setTimeout(() => {
+        setTxHash(`5KzQ...${Math.floor(Math.random() * 8999 + 1000)}SolanaTx`);
+        setLoading(false);
+        setStep(3);
+      }, 1000);
+    } catch (err) {
+      console.error(err);
+      setLoading(false);
+    }
   };
 
-  const handleExecuteAgentPayment = (pdaPubkey: string, amountUsd: number) => {
-    setAllowances((prev) =>
-      prev.map((a) => {
-        if (a.pdaPublicKey === pdaPubkey) {
-          const newSpent = a.spentTodayUsd + amountUsd;
-          return {
-            ...a,
-            spentTodayUsd: newSpent,
-            remainingDailyUsd: Math.max(0, a.dailyLimitUsd - newSpent),
-            totalTransactionsCount: a.totalTransactionsCount + 1,
-          };
-        }
-        return a;
-      })
-    );
-
-    // Add receipt to explorer feed
-    const target = allowances.find((a) => a.pdaPublicKey === pdaPubkey);
-    const newTx: NexaTransaction = {
-      signature: `SIG-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-      slot: 312849150 + Math.floor(Math.random() * 50),
-      blockTime: new Date().toLocaleTimeString(),
-      confirmationStatus: "finalized",
-      finalityMs: 410,
-      type: "AGENTIC_PDA_PAYMENT",
-      buyerPubkey: target?.buyerPublicKey || buyerWalletPubkey,
-      merchantPubkey: target?.merchantPublicKey || merchants[0].solanaWallet,
-      amount: amountUsd,
-      tokenSymbol: "USDC",
-      fiatEquivalentBrl: amountUsd * fxRates.USDC_BRL,
-      cpiInnerInstructionsCount: 2,
-      isZeroCustodyConfirmed: true,
-      logs: [
-        "Program NexaP1ayX1111111111111111111111111111111111 invoke [1]",
-        "Program log: Instruction: ExecuteAgenticPayment",
-        "Program log: Agentic PDA Allowance verified",
-        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
-        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
-        "Program NexaP1ayX1111111111111111111111111111111111 success",
-      ],
-    };
-    setTransactions([newTx, ...transactions]);
-  };
-
-  const handlePaymentSettled = (newTx: NexaTransaction) => {
-    setTransactions([newTx, ...transactions]);
+  const resetDemo = () => {
+    setStep(1);
+    setTxHash('');
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-slate-950">
-      <Navbar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        buyerWalletPubkey={buyerWalletPubkey}
-        onRotateWallet={handleRotateWallet}
-        fxRates={fxRates}
-        openSpecModal={() => setSpecModalOpen(true)}
-      />
-
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        {activeTab === "pos" && (
-          <MerchantPOS
-            merchant={merchants[0]}
-            buyerPubkey={buyerWalletPubkey}
-            fxRates={fxRates}
-            onPaymentSettled={handlePaymentSettled}
-          />
-        )}
-
-        {activeTab === "agentic" && (
-          <AgenticAllowanceWorkspace
-            buyerPubkey={buyerWalletPubkey}
-            merchants={merchants}
-            allowances={allowances}
-            onGrantAllowance={handleGrantAllowance}
-            onRevokeAllowance={handleRevokeAllowance}
-            onExecuteAgentPayment={handleExecuteAgentPayment}
-          />
-        )}
-
-        {activeTab === "cpi" && <CpiLiquidityRouter fxRates={fxRates} />}
-
-        {activeTab === "anchor" && <AnchorCodeInspector />}
-
-        {activeTab === "explorer" && <TransactionExplorer transactions={transactions} />}
-
-        {activeTab === "widget" && (
-          <CheckoutEmbedConfigurator merchant={merchants[0]} buyerPubkey={buyerWalletPubkey} />
-        )}
-
-        {activeTab === "docs" && <DocumentationTab />}
-      </main>
-
-      <footer className="bg-slate-950 border-t border-slate-900 py-6 text-center text-xs text-slate-500 font-mono">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div>
-            Nexa Pay • Solana &amp; Hybrid PIX Non-Custodial Infrastructure
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          <div className="bg-gradient-to-tr from-emerald-500 to-cyan-500 p-2 rounded-xl text-slate-950 font-bold">
+            <Zap className="w-6 h-6" />
           </div>
-          <div className="flex items-center gap-4 text-slate-400">
-            <span>Program: NexaP1ay...1111</span>
-            <span>•</span>
-            <span>Anchor 0.30.1</span>
-            <span>•</span>
-            <button
-              onClick={() => setSpecModalOpen(true)}
-              className="text-cyan-400 hover:underline"
-            >
-              Zero-Custody Proof
-            </button>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-white">NexaPay <span className="text-emerald-400 text-xs px-2 py-0.5 bg-emerald-500/10 rounded-full border border-emerald-500/20">Live Demo</span></h1>
+            <p className="text-xs text-slate-400">Gateway Dual-Rail Não Custodial (PIX + Solana)</p>
           </div>
         </div>
-      </footer>
+        <div className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300">
+          Status Termux: <span className="text-emerald-400 font-semibold">● Online</span>
+        </div>
+      </header>
 
-      <ArchitecturalSpecModal isOpen={specModalOpen} onClose={() => setSpecModalOpen(false)} />
+      <main className="flex-1 max-w-5xl w-full mx-auto p-6 flex flex-col justify-center">
+        <div className="grid grid-cols-3 gap-4 mb-10">
+          <div className={`p-4 rounded-xl border transition-all ${step >= 1 ? 'bg-emerald-950/20 border-emerald-500/50 text-emerald-300' : 'bg-slate-900/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1">Ato 1</div>
+            <div className="font-bold text-sm">1. Geração do Pedido (PIX)</div>
+          </div>
+          <div className={`p-4 rounded-xl border transition-all ${step >= 2 ? 'bg-emerald-950/20 border-emerald-500/50 text-emerald-300' : 'bg-slate-900/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1">Ato 2</div>
+            <div className="font-bold text-sm">2. Intermediação Não Custodial</div>
+          </div>
+          <div className={`p-4 rounded-xl border transition-all ${step >= 3 ? 'bg-emerald-950/20 border-emerald-500/50 text-emerald-300' : 'bg-slate-900/40 border-slate-800 text-slate-500'}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider mb-1">Ato 3</div>
+            <div className="font-bold text-sm">3. Liquidação Instantânea</div>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+          {step === 1 && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 text-emerald-400">
+                <QrCode className="w-8 h-8" />
+                <h2 className="text-2xl font-bold text-white">Checkout do Lojista (PDV)</h2>
+              </div>
+              <p className="text-slate-400 max-w-2xl">
+                O cliente realiza uma compra na banca/estabelecimento. O NexaPay gera um pedido instantâneo com conversão automatizada em tempo real.
+              </p>
+              <div className="bg-slate-950 p-6 rounded-xl border border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-6">
+                <div>
+                  <div className="text-xs text-slate-500 uppercase">Produto Selecionado</div>
+                  <div className="text-lg font-semibold text-white">Assinatura / Produto Premium NexaPay</div>
+                  <div className="text-2xl font-black text-emerald-400 mt-2">R$ 150,00 <span className="text-xs text-slate-400 font-normal">≈ 0.85 SOL</span></div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCreateOrder}
+                  disabled={loading}
+                  className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-6 py-3 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <>Gerar Cobrança PIX <ArrowRight className="w-5 h-5" /></>}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 text-cyan-400">
+                <ShieldCheck className="w-8 h-8" />
+                <h2 className="text-2xl font-bold text-white">Motor Dual-Rail & Não Custodial</h2>
+              </div>
+              <p className="text-slate-400 max-w-2xl">
+                O pagamento PIX foi detectado via Webhook seguro. O NexaPay atua estritamente como roteador, sem reter fundos, garantindo liquidez atômica on-chain.
+              </p>
+              <div className="bg-slate-950 p-6 rounded-xl border border-slate-800 space-y-4">
+                <div className="flex justify-between text-sm py-2 border-b border-slate-800">
+                  <span className="text-slate-400">ID da Ordem:</span>
+                  <span className="font-mono text-emerald-400">{orderId}</span>
+                </div>
+                <div className="flex justify-between text-sm py-2 border-b border-slate-800">
+                  <span className="text-slate-400">Modelo de Custódia:</span>
+                  <span className="text-cyan-400 font-semibold">100% Descentralizado (Smart Contract / Worker)</span>
+                </div>
+                <div className="flex justify-between text-sm py-2">
+                  <span className="text-slate-400">Rede de Destino:</span>
+                  <span className="text-white">Solana Mainnet/Devnet Settlement</span>
+                </div>
+                <div className="pt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleExecuteSettlement}
+                    disabled={loading}
+                    className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-6 py-3 rounded-xl transition flex items-center gap-2 cursor-pointer"
+                  >
+                    {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <>Processar Liquidação On-Chain <ArrowRight className="w-5 h-5" /></>}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="space-y-6 text-center py-6">
+              <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-full flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-10 h-10" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-white">Compra Finalizada com Sucesso!</h2>
+                <p className="text-slate-400 mt-1">O lojista recebeu os fundos instantaneamente na carteira dele on-chain.</p>
+              </div>
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 max-w-md mx-auto text-left space-y-2">
+                <div className="text-xs text-slate-500 uppercase">Recibo da Transação</div>
+                <div className="text-sm font-mono text-emerald-400 truncate">Hash: {txHash}</div>
+                <div className="text-xs text-slate-400">Status: <span className="text-emerald-400 font-bold">SETTLED</span></div>
+              </div>
+              <div className="pt-4">
+                <button
+                  type="button"
+                  onClick={resetDemo}
+                  className="bg-slate-800 hover:bg-slate-700 text-white font-medium px-6 py-2.5 rounded-xl transition cursor-pointer"
+                >
+                  Reiniciar Demonstração para a Banca
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }

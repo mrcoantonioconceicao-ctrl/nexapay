@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS webhook_audit_logs (
+  id SERIAL PRIMARY KEY,
+  order_id TEXT REFERENCES orders(id),
+  txid TEXT,
+  payload JSONB,
+  processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
