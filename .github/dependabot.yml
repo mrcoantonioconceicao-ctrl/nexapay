@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Monitora e atualiza pacotes npm/Bun (backend e dependências JS/TS)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # Monitora ações do GitHub Actions (caso utilize workflows de CI/CD)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
