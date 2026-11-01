@@ -1,0 +1,26 @@
+name: NexaPay CI Pipeline
+
+on:
+  push:
+    branches: [ main, "feature/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Configurar o ambiente Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Instalar Dependências
+        run: bun install
+
+      - name: Validar Build / Servidor TypeScript
+        run: bun build server.ts --target bun
