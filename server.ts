@@ -1,301 +1,305 @@
-import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
-import dotenv from "dotenv";
+/**
+ * NexaPay Production-Ready Backend Server (Bun)
+ * Servidor integrado com API Dual-Rail e Interface Visual embutida.
+ */
 
-dotenv.config();
+import { DualRailSagaOrchestrator } from './src/lib/saga/DualRailSagaOrchestrator';
+import { WebhookHmacVerifier } from './src/lib/security/webhookHmac';
+import { 
+  CheckoutRequestDto, 
+  CheckoutResponseDto, 
+  OrderStatusResponseDto, 
+  WebhookPixPayloadDto 
+} from './src/types/nexaTypes';
 
-const app = express();
-const PORT = 3000;
+const PORT = 3001;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'nexa_sec_live_development_secret_key';
+const orchestrator = new DualRailSagaOrchestrator();
 
-app.use(express.json());
+// HTML do Dashboard Embutido
+const DASHBOARD_HTML = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexaPay - Dual-Rail Checkout</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+    
+    <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+      <div>
+        <h1 class="text-xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">NexaPay Dashboard</h1>
+        <p class="text-xs text-slate-400">Motor Híbrido Pix + Solana USDC</p>
+      </div>
+      <span class="px-3 py-1 text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Online
+      </span>
+    </div>
 
-// Initialize Gemini lazily if API key exists
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
-    return null;
-  }
-  return new GoogleGenAI({ apiKey });
-}
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-300 mb-1">Nome do Lojista</label>
+        <input type="text" id="merchantName" value="Loja Blumenau Tech" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 text-slate-200">
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Valor em BRL (Pix)</label>
+          <input type="number" id="amountBrl" value="150.00" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 text-slate-200">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">USDC Esperado</label>
+          <input type="number" id="amountUsdc" value="27.50" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500 text-slate-200">
+        </div>
+      </div>
+      <button onclick="handleCheckout()" class="w-full bg-emerald-600 hover:bg-emerald-500 font-semibold py-2.5 rounded-lg transition-all shadow-lg shadow-emerald-600/20 text-sm cursor-pointer">
+        Gerar Checkout Híbrido
+      </button>
+    </div>
 
-// API Routes
-app.get("/api/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    system: "Nexa Pay Solana & Hybrid PIX Gateway",
-    network: "Solana Devnet / Mainnet-Beta Hybrid",
-    timestamp: new Date().toISOString(),
-  });
-});
+    <div id="resultContainer" class="mt-6 hidden border-t border-slate-800 pt-6 space-y-4">
+      <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+        <p class="text-[10px] text-slate-400 uppercase font-mono tracking-wider mb-1">Order ID</p>
+        <p id="resOrderId" class="text-xs font-mono text-cyan-400 break-all"></p>
+      </div>
 
-// Live FX rates endpoint (USDC/BRL, SOL/BRL, EURC/BRL)
-app.get("/api/fx-rates", (_req, res) => {
-  res.json({
-    base: "USD",
-    rates: {
-      USDC_BRL: 5.465,
-      SOL_BRL: 745.20,
-      SOL_USD: 136.35,
-      EURC_BRL: 5.92,
-    },
-    updatedAt: new Date().toISOString(),
-    provider: "Nexa Liquidity Aggregator Engine (Orca + BACEN Central Bank API)",
-  });
-});
+      <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+        <div class="flex justify-between items-center mb-1">
+          <p class="text-[10px] text-slate-400 uppercase font-mono tracking-wider">Pix Copia e Cola</p>
+          <button onclick="copyPix()" class="text-[10px] text-emerald-400 hover:underline cursor-pointer">Copiar</button>
+        </div>
+        <textarea id="resPix" readonly class="w-full bg-slate-900 text-[11px] font-mono text-slate-300 p-2 rounded border border-slate-800 h-14 resize-none focus:outline-none"></textarea>
+      </div>
 
-// Generate EMV QRCPS (BACEN PIX) Payload Standard
-app.post("/api/pix/generate-emv", (req, res) => {
-  const { pixKey, merchantName, merchantCity, txAmount, txId, description } = req.body;
-  
-  if (!pixKey || !merchantName) {
-    return res.status(400).json({ error: "Missing required fields: pixKey and merchantName" });
-  }
+      <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+        <p class="text-[10px] text-slate-400 uppercase font-mono tracking-wider mb-1">Solana Pay Link (USDC)</p>
+        <p id="resSolana" class="text-[11px] font-mono text-emerald-400 break-all"></p>
+      </div>
 
-  // Format Helper for TLV (Tag-Length-Value)
-  const formatTlv = (tag: string, value: string) => {
-    const len = value.length.toString().padStart(2, "0");
-    return `${tag}${len}${value}`;
-  };
+      <div class="flex items-center justify-between pt-2">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-400">Status:</span>
+          <span id="resStatus" class="px-2.5 py-0.5 text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full">PENDING</span>
+        </div>
+        <button onclick="checkStatus()" class="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all border border-slate-700 cursor-pointer">
+          Verificar Status
+        </button>
+      </div>
+    </div>
 
-  // CRC16-CCITT Calculation
-  const computeCrc16 = (payload: string): string => {
-    let crc = 0xffff;
-    const polynomial = 0x1021;
-    const bytes = Buffer.from(payload, "utf8");
+  </div>
 
-    for (const b of bytes) {
-      for (let i = 0; i < 8; i++) {
-        const bit = ((b >> (7 - i)) & 1) === 1;
-        const c15 = ((crc >> 15) & 1) === 1;
-        crc <<= 1;
-        if (c15 !== bit) {
-          crc ^= polynomial;
+  <script>
+    const API_URL = '';
+    let currentOrderId = '';
+
+    async function handleCheckout() {
+      const merchantName = document.getElementById('merchantName').value;
+      const amountBrl = parseFloat(document.getElementById('amountBrl').value);
+      const amountUsdcExpected = parseFloat(document.getElementById('amountUsdc').value);
+
+      try {
+        const res = await fetch(\`\${API_URL}/api/v1/checkout\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            merchantId: 'merch_frontend_demo',
+            merchantName,
+            merchantCity: 'Blumenau',
+            pixKey: 'pix@nexapay.io',
+            amountBrl,
+            amountUsdcExpected,
+            merchantWallet: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
+          })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+          currentOrderId = data.orderId;
+          document.getElementById('resOrderId').innerText = data.orderId;
+          document.getElementById('resPix').value = data.pixCopyPaste;
+          document.getElementById('resSolana').innerText = data.solanaPayUrl;
+          document.getElementById('resStatus').innerText = 'PENDING';
+          document.getElementById('resStatus').className = 'px-2.5 py-0.5 text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full';
+          document.getElementById('resultContainer').classList.remove('hidden');
+        } else {
+          alert('Erro ao criar checkout: ' + (data.error || 'Erro desconhecido'));
         }
+      } catch (err) {
+        alert('Erro de conexão com o backend: ' + err.message);
       }
     }
-    crc &= 0xffff;
-    return crc.toString(16).toUpperCase().padStart(4, "0");
-  };
 
-  try {
-    const p00 = formatTlv("00", "01"); // Payload Format Indicator
-    const p01 = formatTlv("01", "12"); // Point of Initiation Method (Dynamic=12)
-    
-    // Merchant Account Information (Tag 26 for PIX)
-    const gui = formatTlv("00", "br.gov.bcb.pix");
-    const key = formatTlv("01", pixKey);
-    const desc = description ? formatTlv("02", description) : "";
-    const merchantInfo = formatTlv("26", `${gui}${key}${desc}`);
-    
-    const category = formatTlv("52", "0000"); // Merchant Category Code
-    const currency = formatTlv("53", "986"); // Transaction Currency (986 = BRL)
-    const amountStr = txAmount ? Number(txAmount).toFixed(2) : "";
-    const amount = amountStr ? formatTlv("54", amountStr) : "";
-    const country = formatTlv("58", "BR"); // Country Code
-    const name = formatTlv("59", merchantName.slice(0, 25));
-    const city = formatTlv("60", (merchantCity || "SAO PAULO").slice(0, 15));
-    
-    // Additional Data Field Template (Tag 62)
-    const reference = formatTlv("05", (txId || "***").slice(0, 25));
-    const additionalData = formatTlv("62", reference);
-    
-    const rawWithoutCrc = `${p00}${p01}${merchantInfo}${category}${currency}${amount}${country}${name}${city}${additionalData}6304`;
-    const crc = computeCrc16(rawWithoutCrc);
-    const fullEmvPayload = `${rawWithoutCrc}${crc}`;
+    async function checkStatus() {
+      if (!currentOrderId) return;
+      try {
+        const res = await fetch(\`\${API_URL}/api/v1/order/\${currentOrderId}\`);
+        const data = await res.json();
+        if (data.success) {
+          const statusEl = document.getElementById('resStatus');
+          statusEl.innerText = data.order.status;
+          if (data.order.status === 'SETTLED') {
+            statusEl.className = 'px-2.5 py-0.5 text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full';
+          } else if (data.order.status === 'EXPIRED') {
+            statusEl.className = 'px-2.5 py-0.5 text-xs font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-full';
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
 
-    return res.json({
-      success: true,
-      payload: fullEmvPayload,
-      crc,
-      txId: txId || `NEXA-${Date.now()}`,
-      formattedAmount: amountStr ? `R$ ${amountStr}` : "Open Amount",
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || "Failed to generate EMV payload" });
-  }
+    function copyPix() {
+      const pixBox = document.getElementById('resPix');
+      pixBox.select();
+      navigator.clipboard.writeText(pixBox.value);
+      alert('Chave Pix Copia e Cola copiada!');
+    }
+  </script>
+</body>
+</html>`;
+
+const server = Bun.serve({
+  port: PORT,
+  async fetch(req) {
+    const url = new URL(req.url);
+    const method = req.method;
+
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Signature',
+    };
+
+    if (method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
+
+    try {
+      // -----------------------------------------------------------------
+      // GET / - Serve o Dashboard Visual embutido
+      // -----------------------------------------------------------------
+      if (method === 'GET' && url.pathname === '/') {
+        return new Response(DASHBOARD_HTML, {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+
+      // -----------------------------------------------------------------
+      // POST /api/v1/checkout - Criação de Pedido Híbrido
+      // -----------------------------------------------------------------
+      if (method === 'POST' && url.pathname === '/api/v1/checkout') {
+        const body = (await req.json()) as CheckoutRequestDto;
+
+        if (!body.merchantId || !body.amountBrl || !body.amountUsdcExpected) {
+          const errRes: CheckoutResponseDto = {
+            success: false,
+            orderId: '',
+            pixCopyPaste: '',
+            solanaPayUrl: '',
+            expiresAt: 0,
+            error: 'Campos obrigatórios ausentes.'
+          };
+          return new Response(JSON.stringify(errRes), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        const order = await orchestrator.createOrder({
+          merchantId: body.merchantId,
+          amountBrl: body.amountBrl,
+          amountUsdcExpected: body.amountUsdcExpected,
+          merchantWallet: body.merchantWallet || '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
+        });
+
+        const pixCopyPaste = `00020126580014br.gov.bcb.pix0136nexa-pay-${order.orderId}5204000053039865802BR5925NexaPay Merchant6009Blumenau62070503***`;
+        const solanaPayUrl = `solana:${order.merchantWallet}?amount=${order.amountUsdcExpected}&reference=${order.orderId}&label=NexaPay%20Order&message=Checkout%20${order.orderId}`;
+
+        const responseDto: CheckoutResponseDto = {
+          success: true,
+          orderId: order.orderId,
+          pixCopyPaste,
+          solanaPayUrl,
+          expiresAt: order.expiresAt
+        };
+
+        return new Response(JSON.stringify(responseDto), { status: 201, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      // -----------------------------------------------------------------
+      // GET /api/v1/order/:id - Consulta de Status
+      // -----------------------------------------------------------------
+      if (method === 'GET' && url.pathname.startsWith('/api/v1/order/')) {
+        const orderId = url.pathname.split('/').pop();
+        const order = orchestrator.getOrder(orderId || '');
+
+        if (!order) {
+          const errRes: OrderStatusResponseDto = {
+            success: false,
+            error: 'Pedido não encontrado.'
+          };
+          return new Response(JSON.stringify(errRes), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        const responseDto: OrderStatusResponseDto = {
+          success: true,
+          order: {
+            orderId: order.orderId,
+            merchantId: order.merchantId,
+            amountBrl: order.amountBrl,
+            amountUsdcExpected: order.amountUsdcExpected,
+            status: order.status,
+            railUsed: order.railUsed,
+            createdAt: order.createdAt,
+            expiresAt: order.expiresAt
+          }
+        };
+
+        return new Response(JSON.stringify(responseDto), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      // -----------------------------------------------------------------
+      // POST /api/v1/webhook/pix - Webhook Pix HMAC
+      // -----------------------------------------------------------------
+      if (method === 'POST' && url.pathname === '/api/v1/webhook/pix') {
+        const rawBody = await req.text();
+        const signatureHeader = req.headers.get('X-Signature') || '';
+
+        const isValid = await WebhookHmacVerifier.verifySignature({
+          signatureHeader,
+          rawBody,
+          secret: WEBHOOK_SECRET,
+          toleranceSeconds: 300
+        });
+
+        if (!isValid) {
+          return new Response(JSON.stringify({ success: false, error: 'Assinatura HMAC inválida.' }), {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const payload = JSON.parse(rawBody) as WebhookPixPayloadDto;
+        const settledOrder = await orchestrator.handlePixPayment(payload.orderId);
+
+        return new Response(JSON.stringify({ success: true, order: settledOrder }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({ success: false, error: 'Endpoint não encontrado.' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+
+    } catch (error: any) {
+      return new Response(JSON.stringify({ success: false, error: error.message || 'Erro interno.' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+  },
 });
 
-// Gemini-powered Agentic Allowance Security Evaluator
-
-// IMPORTANT: Define this sanitization function to prevent Prompt Injection (OWASP A3)
-function sanitizeUserInputForLLM(input: string): string {
-  // Basic sanitization to prevent prompt injection by escaping characters
-  // that could break the LLM's parsing or be interpreted as instructions.
-  // The exact escaping may need to be fine-tuned for the specific LLM and its vulnerabilities.
-  // This is a minimal example; a robust solution might involve more complex parsing or a dedicated library.
-  return input
-    .replace(/\\/g, '\\\\') // Escape backslashes first
-    .replace(/"/g, '\"')   // Escape double quotes
-    .replace(/'/g, "\'")   // Escape single quotes
-    .replace(/`/g, '\`')   // Escape backticks
-    .replace(/\n/g, '\\n')  // Escape newlines
-    .replace(/\r/g, '\\r')  // Escape carriage returns
-    .replace(/\$/g, '\\
-app.post("/api/ai/evaluate-policy", async (req, res) => {
-  const { agentId, requestedAmountUsd, merchantPubkey, historicalSpendUsd, policyParams, prompt } = req.body;
-  const ai = getGeminiClient();
-
-  if (!ai) {
-    // Return heuristic policy response if no Gemini API key configured
-    const limit = policyParams?.maxSpendPerTx || 50;
-    const isApproved = requestedAmountUsd <= limit;
-    return res.json({
-      approved: isApproved,
-      riskScore: isApproved ? 12 : 88,
-      reasoning: isApproved
-        ? `Request of $${requestedAmountUsd} is within configured PDA Agentic Allowance of $${limit}. Zero-custody CPI route validated.`
-        : `Request of $${requestedAmountUsd} exceeds spending cap of $${limit}. Transaction vetoed by PDA guard logic.`,
-      recommendedPriorityFeeLamports: 5000,
-      mode: "Heuristic Guard (Fallback)",
-    });
-  }
-
-  try {
-    const model = ai.models;
-    const response = await model.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `You are the Security Risk Engine for Nexa Pay's Agentic Session Allowance PDA framework on Solana.
-Analyze this automated AI agent payment request:
-- Agent ID: ${agentId}
-- Requested Amount USD: $${requestedAmountUsd}
-- Merchant Public Key: ${merchantPubkey}
-- Agent Historical 24h Spend: $${historicalSpendUsd}
-- Max Spend Per Tx Allowed: $${policyParams?.maxSpendPerTx || 50}
-- Max Daily Limit: $${policyParams?.maxDailyLimit || 200}
-- Allowed Categories: ${policyParams?.allowedCategories?.join(", ") || "APIs, Compute, SaaS"}
-- Custom Context/Prompt: ${sanitizeUserInputForLLM(prompt || "Standard API micro-payment evaluation")}
-
-Respond strictly in JSON with this structure:
-{
-  "approved": boolean,
-  "riskScore": number (0-100),
-  "reasoning": string,
-  "recommendedPriorityFeeLamports": number,
-  "suggestedSafetyAction": string
-}`,
-    });
-
-    const text = response.text || "";
-    // Clean JSON formatting if wrapped in markdown codeblocks
-    const cleanJson = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
-    return res.json({ ...parsed, mode: "Gemini 2.5 Flash Autonomous Risk Engine" });
-  } catch (err: any) {
-    return res.json({
-      approved: requestedAmountUsd <= (policyParams?.maxSpendPerTx || 50),
-      riskScore: 25,
-      reasoning: `Evaluated by Nexa PDA Guard rules: ${err.message || "Standard compliance rule applied"}`,
-      recommendedPriorityFeeLamports: 5000,
-      mode: "Heuristic Fallback",
-    });
-  }
-});
-
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Nexa Pay Server listening on http://0.0.0.0:${PORT}`);
-  });
-}
-
-startServer();
-)  // Escape dollar signs (if used in template literals by LLM)
-    .trim();
-}
-
-app.post("/api/ai/evaluate-policy", async (req, res) => {
-  const { agentId, requestedAmountUsd, merchantPubkey, historicalSpendUsd, policyParams, prompt } = req.body;
-  const ai = getGeminiClient();
-
-  if (!ai) {
-    // Return heuristic policy response if no Gemini API key configured
-    const limit = policyParams?.maxSpendPerTx || 50;
-    const isApproved = requestedAmountUsd <= limit;
-    return res.json({
-      approved: isApproved,
-      riskScore: isApproved ? 12 : 88,
-      reasoning: isApproved
-        ? `Request of $${requestedAmountUsd} is within configured PDA Agentic Allowance of $${limit}. Zero-custody CPI route validated.`
-        : `Request of $${requestedAmountUsd} exceeds spending cap of $${limit}. Transaction vetoed by PDA guard logic.`,
-      recommendedPriorityFeeLamports: 5000,
-      mode: "Heuristic Guard (Fallback)",
-    });
-  }
-
-  try {
-    const model = ai.models;
-    const response = await model.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `You are the Security Risk Engine for Nexa Pay's Agentic Session Allowance PDA framework on Solana.
-Analyze this automated AI agent payment request:
-- Agent ID: ${agentId}
-- Requested Amount USD: $${requestedAmountUsd}
-- Merchant Public Key: ${merchantPubkey}
-- Agent Historical 24h Spend: $${historicalSpendUsd}
-- Max Spend Per Tx Allowed: $${policyParams?.maxSpendPerTx || 50}
-- Max Daily Limit: $${policyParams?.maxDailyLimit || 200}
-- Allowed Categories: ${policyParams?.allowedCategories?.join(", ") || "APIs, Compute, SaaS"}
-- Custom Context/Prompt: ${sanitizeUserInputForLLM(prompt || "Standard API micro-payment evaluation")}
-
-Respond strictly in JSON with this structure:
-{
-  "approved": boolean,
-  "riskScore": number (0-100),
-  "reasoning": string,
-  "recommendedPriorityFeeLamports": number,
-  "suggestedSafetyAction": string
-}`,
-    });
-
-    const text = response.text || "";
-    // Clean JSON formatting if wrapped in markdown codeblocks
-    const cleanJson = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
-    return res.json({ ...parsed, mode: "Gemini 2.5 Flash Autonomous Risk Engine" });
-  } catch (err: any) {
-    return res.json({
-      approved: requestedAmountUsd <= (policyParams?.maxSpendPerTx || 50),
-      riskScore: 25,
-      reasoning: `Evaluated by Nexa PDA Guard rules: ${err.message || "Standard compliance rule applied"}`,
-      recommendedPriorityFeeLamports: 5000,
-      mode: "Heuristic Fallback",
-    });
-  }
-});
-
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Nexa Pay Server listening on http://0.0.0.0:${PORT}`);
-  });
-}
-
-startServer();
+console.log(`🚀 [NexaPay] Servidor e Dashboard rodando na porta ${PORT} (http://localhost:${PORT})`);
